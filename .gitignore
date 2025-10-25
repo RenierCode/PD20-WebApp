@@ -1,0 +1,25 @@
+# Python virtual environment
+# Common venv locations (repo root and backend)
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# Node.js dependencies
+node_modules/
+dist/
+build/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+/.history

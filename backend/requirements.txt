@@ -1,0 +1,12 @@
+# Minimal backend requirements for PD-20 remake
+# Use pip install -r requirements.txt inside backend/.venv
+fastapi[all]>=0.95.0
+uvicorn[standard]>=0.22.0
+motor>=3.1.1
+pydantic-settings>=1.0.0
+python-dotenv>=1.0.0
+pymongo>=4.3.0
+dnspython>=2.4.0
+numpy>=1.24.0
+
+
