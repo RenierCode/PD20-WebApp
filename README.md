@@ -145,8 +145,3 @@ git commit -m "Add .gitattributes and normalize line endings"
 
 - Frontend code: `frontend/src/` (React components and pages)
 - Backend code: `backend/` (FastAPI app and models)
-
-If you'd like, I can:
-- add a `.gitattributes` to this repo and run the renormalize steps, or
-- commit this `README.md` for you.
-
