@@ -2,376 +2,236 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
-import { LuHardDrive, LuTimer, LuTags, LuDatabaseZap } from 'react-icons/lu';
-import { Link } from 'react-router-dom';
+// MODIFIED: Removed LuHardDrive, LuTimer, Link
+import { LuTags, LuDatabaseZap, LuSignal } from 'react-icons/lu';
+// MODIFIED: Removed Link
 import { Line } from 'react-chartjs-2';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  TimeScale,
-} from 'chart.js'; // Ensure no trailing comma here
+  Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, TimeScale,
+} from 'chart.js';
 import 'chartjs-adapter-date-fns';
 
 // Register Chart.js components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  TimeScale,
-  Title,
-  Tooltip,
-  Legend
-);
+ChartJS.register( CategoryScale, LinearScale, PointElement, LineElement, TimeScale, Title, Tooltip, Legend );
 
 const API_URL = 'http://127.0.0.1:8000';
-const BRIGHT_COLORS = [
-  '#E6194B', '#3CB44B', '#0082C8', '#F58231',
-  '#911EB4', '#46F0F0', '#F032E6', '#FFE119',
-];
+const BRIGHT_COLORS = [ '#E6194B', '#3CB44B', '#0082C8', '#F58231', '#911EB4', '#46F0F0', '#F032E6', '#FFE119', ];
+const shuffleColors = () => { const a=[...BRIGHT_COLORS]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; };
 
-const shuffleColors = () => {
-  const array = [...BRIGHT_COLORS];
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-};
+// --- REMOVED: useStatusColor hook ---
+// --- REMOVED: NodeCard component ---
 
-const useStatusColor = (status) =>
-  status === 'Active'
-    ? 'bg-[var(--status-active)]'
-    : 'bg-[var(--status-inactive)]';
+// SummaryStatCard component (Unchanged)
+const SummaryStatCard = ({ title, value, icon }) => ( <div className="bg-white p-6 rounded-lg shadow-md flex items-center gap-4"><div className="text-3xl text-blue-500">{icon}</div><div><div className="text-sm font-medium text-gray-500">{title}</div><div className="text-3xl font-bold">{value}</div></div></div> );
 
-const NodeCard = ({ node }) => {
-  const statusColorClass = useStatusColor(node.status);
+
+// --- LatestDataCard Component (Unchanged) ---
+const LatestDataCard = ({ nodeId, value, timestamp, sensorKey }) => {
+  const formatTime = (date) => date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 transition-all transform hover:-translate-y-1 hover:shadow-lg">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-xl font-semibold flex items-center gap-2">
-          <LuHardDrive /> {node.nodeId}
-        </h3>
-        <div
-          className={`w-3 h-3 rounded-full ${statusColorClass}`}
-          title={node.status}
-        ></div>
+    <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+      <div className="flex justify-between items-baseline gap-2">
+         <div className="text-lg font-semibold text-gray-800">{nodeId}</div>
+         <div className="font-mono text-xs text-gray-500">{formatTime(timestamp)}</div>
       </div>
-      <div className="flex flex-wrap gap-2 mb-4">
-        {node.sensors.map((sensor) => (
-          <span
-            key={sensor}
-            className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium"
-          >
-            {sensor}
-          </span>
-        ))}
+      <div className="text-3xl font-bold text-gray-900 truncate" title={String(value)}>
+        {typeof value === 'number' ? value.toFixed(2) : value}
       </div>
-      <div className="text-sm text-gray-500 flex items-center gap-2">
-        <LuTimer />
-        Last seen:{' '}
-        {node.lastSeen ? new Date(node.lastSeen).toLocaleString() : 'Never'}
-      </div>
+      <div className="text-xs text-gray-500 capitalize">{sensorKey}</div>
     </div>
   );
 };
 
-const SummaryStatCard = ({ title, value, icon }) => (
-  <div className="bg-white p-6 rounded-lg shadow-md flex items-center gap-4">
-    <div className="text-3xl text-blue-500">{icon}</div>
-    <div>
-      <div className="text-sm font-medium text-gray-500">{title}</div>
-      <div className="text-3xl font-bold">{value}</div>
-    </div>
-  </div>
-);
 
-// --- SummaryGraph Component ---
-const transformDataForChartJS = (apiData, nodeColors) => {
-  if (!apiData || apiData.length === 0) return { labels: [], datasets: [] };
-  const nodeKeys = Object.keys(apiData[0]).filter((key) => key !== 'timestamp');
-  const labels = apiData.map((item) => item.timestamp);
-  const datasets = nodeKeys.map((nodeId, index) => ({
-    label: nodeId,
-    data: apiData.map((item) => item[nodeId] ?? null),
-    borderColor: nodeColors[index % nodeColors.length],
-    backgroundColor: `${nodeColors[index % nodeColors.length]}80`,
-    fill: false,
-    tension: 0.1,
-  }));
-  return { labels, datasets };
-};
+// --- SummaryGraph Component (Unchanged) ---
+const SummaryGraph = ({ rawGraphData, nodeColors, isLoading, error, selectedSensor }) => {
+  const [chartData, setChartData] = useState({ labels: [], datasets: [] });
 
-const SummaryGraph = ({ selectedSensor, timeRange, nodeColors, triggerRefetch }) => {
-  const [graphData, setGraphData] = useState({ labels: [], datasets: [] });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  const fetchGraphData = useCallback(async () => {
-    if (!selectedSensor) {
-      setGraphData({ labels: [], datasets: [] });
-      return;
-    }
-    // Don't set loading true here for polling to avoid flash
-    setError(null);
-    try {
-      const response = await axios.get(
-        `${API_URL}/api/data/sensor/${selectedSensor}?range=${timeRange}`
-      );
-      setGraphData(transformDataForChartJS(response.data, nodeColors));
-    } catch (err) {
-      setError(`Failed data fetch.`);
-      console.error(err);
-    } finally {
-      setLoading(false); // Ensure loading is false after fetch/refetch
-    }
-  }, [selectedSensor, timeRange, nodeColors]);
+  const transformDataForChartJS = useCallback((apiData, colors) => {
+    if (!apiData || apiData.length === 0) return { labels: [], datasets: [] };
+    const nodeKeySet = new Set(apiData.flatMap(item => Object.keys(item).filter(key => key !== 'timestamp')));
+    const nodeKeys = Array.from(nodeKeySet);
+    const labels = apiData.map((item) => item.timestamp);
+    const datasets = nodeKeys.map((nodeId, index) => ({
+      label: nodeId,
+      data: apiData.map((item) => item[nodeId] ?? null),
+      borderColor: colors[index % colors.length],
+      backgroundColor: `${colors[index % colors.length]}80`,
+      fill: false,
+      tension: 0.1,
+      spanGaps: true,
+    }));
+    return { labels, datasets };
+  }, []);
 
   useEffect(() => {
-    // Only set loading true if it's not a background poll (i.e., sensor/range changed)
-    // We check this by seeing if graphData is currently empty
-    if (graphData.datasets.length === 0 && selectedSensor) {
-      setLoading(true);
-    }
-    fetchGraphData();
-  }, [fetchGraphData, triggerRefetch, selectedSensor, timeRange]);
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: 'x', intersect: false },
-    plugins: {
-      legend: { position: 'top' },
-      tooltip: { mode: 'x', intersect: false },
-    },
-    scales: {
-      x: {
-        type: 'time', // Use the time scale
-        time: {
-          tooltipFormat: 'PPp', // Format for the hover tooltip
-
-          // --- LET CHART.JS CHOOSE THE UNIT ---
-          // DO NOT specify 'unit: 'hour'' or similar here.
-          displayFormats: {
-            hour: 'MMM d, h a', // How to format if it chooses 'hour'
-            minute: 'h:mm a',
-            day: 'MMM d',      // How to format if it chooses 'day'
-            month: 'MMM yyyy'  // How to format if it chooses 'month'
-          }
-        },
-        title: {
-          display: true,
-          text: 'Timestamp',
-        },
-        ticks: {
-          autoSkip: true,      // Automatically hide ticks to prevent overlap
-          // maxTicksLimit: 10,   // Optional: Limit ticks further if needed
-          // --- ALLOW ROTATION ONLY IF NEEDED ---
-          maxRotation: 45,     // Allow rotating up to 45 degrees
-          minRotation: 0       // But prefer 0 degrees (horizontal)
-        }
-      },
-      y: {
-        title: {
-          display: true,
-          text: 'Value',
-        },
-      },
-    },
-  };
-
+    setChartData(transformDataForChartJS(rawGraphData, nodeColors));
+  }, [rawGraphData, nodeColors, transformDataForChartJS]);
+  
+  const chartOptions = { responsive: true, maintainAspectRatio: false, interaction:{mode:'x',intersect:false}, plugins:{legend:{position:'top'},tooltip:{mode:'x',intersect:false}}, scales:{x:{type:'time',time:{displayFormats:{hour:'MMM d, h a',day:'MMM d',month:'MMM yyyy'},tooltipFormat:'PPp'},title:{display:true,text:'Timestamp'}},y:{title:{display:true,text:'Value'}}}, };
+  
   if (!selectedSensor) {
-    return (
-      <div className="flex items-center justify-center h-96 bg-gray-50 rounded-lg">
-        <p className="text-gray-500">Please select a sensor.</p>
-      </div>
-    );
+     return (<div className="flex items-center justify-center h-96 bg-gray-50 rounded-lg"><p className="text-gray-500">Please select a sensor.</p></div>);
   }
-
-  // Show loading indicator only on the very first load
-  if (loading && graphData.datasets.length === 0) {
-    return <div>Loading graph data...</div>;
+  if (isLoading && chartData.datasets.length === 0) {
+    return <div className="flex items-center justify-center h-96"><p>Loading graph data...</p></div>;
   }
   if (error) {
-    return <div className="text-red-600 font-semibold">{error}</div>;
+    return <div className="flex items-center justify-center h-96 text-red-600 font-semibold">{error}</div>;
   }
-
-  return (
-    <div style={{ height: '400px' }}>
-      <Line options={chartOptions} data={graphData} />
-    </div>
-  );
+  if (chartData.datasets.length === 0 && !isLoading) {
+     return (<div className="flex items-center justify-center h-96 bg-gray-50 rounded-lg"><p className="text-gray-500">No data found for this selection.</p></div>);
+  }
+  
+  return (<div style={{height:'400px'}}><Line options={chartOptions} data={chartData} /></div>);
 };
 
-// --- Main Dashboard component ---
+
+// --- Main Dashboard component (with polling) ---
 const Dashboard = () => {
-  const [nodes, setNodes] = useState([]);
-  const [loading, setLoading] = useState(true); // For initial load only
+  const [nodes, setNodes] = useState([]); 
+  const [loading, setLoading] = useState(true); 
   const [error, setError] = useState(null);
-  const [selectedSensor, setSelectedSensor] = useState('');
+  const [selectedSensor, setSelectedSensor] = useState(''); 
   const [timeRange, setTimeRange] = useState('latest24h');
-  const [lineColors, setLineColors] = useState(() => shuffleColors());
+  const [lineColors, setLineColors] = useState(() => shuffleColors()); 
   const [graphRefetchTrigger, setGraphRefetchTrigger] = useState(0);
 
-  const rangeOptions = [
-    { value: 'latest24h', label: 'Latest 24h (Data)' },
-    { value: '24h', label: 'Last 24h (Now)' },
-    { value: '1w', label: 'Last 7d' },
-    { value: '1m', label: 'Last 30d' },
-    { value: 'all', label: 'All Time' },
-  ];
+  const [rawGraphData, setRawGraphData] = useState([]);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState(null);
 
-  // Callback to fetch node list (for polling)
-  const fetchNodes = useCallback(async () => {
+  const rangeOptions = [{value:'latest24h',label:'Latest 24h(Data)'},{value:'24h',label:'Last 24h(Now)'},{value:'1w',label:'Last 7d'},{value:'1m',label:'Last 30d'},{value:'all',label:'All Time'},];
+
+  // Memoized function to fetch nodes
+  const fetchNodes = useCallback(async () => { 
+    try { const r = await axios.get(`${API_URL}/api/nodes`); setNodes(r.data); } 
+    catch(e){ setError("Node poll error."); console.error("Poll:", e); } 
+  }, []);
+
+  // Memoized function to fetch graph data
+  const fetchGraphData = useCallback(async (isPoll = false) => {
+    if (!selectedSensor) { setRawGraphData([]); return; }
+    if (!isPoll) setGraphLoading(true); 
+    setGraphError(null);
     try {
-      const response = await axios.get(`${API_URL}/api/nodes`);
-      setNodes(response.data);
-      // Optionally clear error on successful poll
-      // setError(null);
-    } catch (err) {
-      setError('Node list update failed.'); // Specific polling error
-      console.error('Polling fetchNodes error:', err);
-    }
-  }, []); // Empty dependency array
+      const r = await axios.get(`${API_URL}/api/data/sensor/${selectedSensor}?range=${timeRange}`);
+      setRawGraphData(r.data);
+    } catch (e) { setGraphError(`Fetch error.`); console.error(e); } 
+    finally { if (!isPoll) setGraphLoading(false); }
+  }, [selectedSensor, timeRange]);
 
-  // Initial fetch effect
-  useEffect(() => {
-    setLoading(true); // Set initial loading
-    fetchNodes().finally(() => setLoading(false)); // Clear initial loading after fetch
-  }, [fetchNodes]); // Run once
+  // Effect for initial node load
+  useEffect(() => { setLoading(true); fetchNodes().finally(() => setLoading(false)); }, [fetchNodes]);
 
-  // Polling useEffect
-  useEffect(() => {
-    const pollInterval = 5000; // Poll every 5 seconds
-    console.log(`Setting up polling: ${pollInterval / 1000}s`);
+  // Effect for polling (triggers both fetches)
+  useEffect(() => { 
+    const poll=10000; 
+    const id=setInterval(()=>{ fetchNodes(); setGraphRefetchTrigger(p => p + 1); }, poll); 
+    return () => clearInterval(id); 
+  }, [fetchNodes]);
 
-    const intervalId = setInterval(() => {
-      console.log('Polling...');
-      fetchNodes(); // Fetch nodes for status updates
-      setGraphRefetchTrigger((prev) => prev + 1); // Trigger graph update
-    }, pollInterval);
+  // Effect to fetch graph data on manual change (sensor, range)
+  useEffect(() => { fetchGraphData(false); }, [selectedSensor, timeRange, fetchGraphData]);
 
-    // Cleanup function
-    return () => {
-      console.log('Clearing polling interval.');
-      clearInterval(intervalId);
-    };
-  }, [fetchNodes]); // Dependency ensures interval restarts if fetchNodes changes
+  // Effect to fetch graph data on poll trigger
+  useEffect(() => { if (graphRefetchTrigger > 0) { fetchGraphData(true); } }, [graphRefetchTrigger, fetchGraphData]);
 
-  const allSensors = useMemo(
-    () => Array.from(new Set(nodes.flatMap((n) => n.sensors))).sort(),
-    [nodes]
-  );
+  // Memoized calculations
+  const allSensors = useMemo(() => Array.from(new Set(nodes.flatMap(n=>n.sensors))).sort(), [nodes]);
+  const summaryStats = useMemo(() => ({totalNodes:nodes.length, uniqueSensorTypes:allSensors.length, totalSensorInstances:nodes.reduce((a,n)=>a+n.sensors.length,0)}), [nodes, allSensors]);
+  
+  // Effect for initial random sensor selection
+  useEffect(() => { if(allSensors.length>0 && selectedSensor===''){setSelectedSensor(allSensors[Math.floor(Math.random()*allSensors.length)]);} }, [allSensors, selectedSensor]);
+  
+  const handleSensorChange = (e) => {setSelectedSensor(e.target.value); setLineColors(shuffleColors());};
 
-  const summaryStats = useMemo(
-    () => ({
-      totalNodes: nodes.length,
-      uniqueSensorTypes: allSensors.length,
-      totalSensorInstances: nodes.reduce((a, n) => a + n.sensors.length, 0),
-    }),
-    [nodes, allSensors]
-  );
+  // Calculate latest data here in the parent
+  const latestNodeData = useMemo(() => {
+    if (!rawGraphData || rawGraphData.length === 0) return [];
+    const nodeKeys = Array.from(new Set(rawGraphData.flatMap(item => Object.keys(item).filter(key => key !== 'timestamp'))));
+    const latestData = nodeKeys.map(nodeId => {
+      const lastEntry = [...rawGraphData].reverse().find(item => item[nodeId] != null);
+      if (lastEntry) return { nodeId: nodeId, value: lastEntry[nodeId], timestamp: new Date(lastEntry.timestamp) };
+      return null;
+    }).filter(Boolean);
+    latestData.sort((a, b) => b.timestamp - a.timestamp);
+    return latestData;
+  }, [rawGraphData]);
 
-  // Effect to set initial random sensor
-  useEffect(() => {
-    if (allSensors.length > 0 && selectedSensor === '') {
-      setSelectedSensor(
-        allSensors[Math.floor(Math.random() * allSensors.length)]
-      );
-    }
-  }, [allSensors, selectedSensor]);
 
-  const handleSensorChange = (e) => {
-    setSelectedSensor(e.target.value);
-    setLineColors(shuffleColors());
-  };
-
-  // Show initial loading screen
-  if (loading) return <div>Loading node list...</div>;
+  if(loading) return <div>Loading nodes...</div>; // Only show initial page load
 
   return (
     <div>
       <h1 className="text-4xl font-bold mb-8">Dashboard</h1>
-      {/* Show polling error discreetly */}
-      {error && !loading && (
-        <div className="mb-4 text-red-600 text-sm font-semibold">
-          {error} Check console.
-        </div>
-      )}
-
+      {error && !loading && <div className="mb-4 text-red-600 text-sm font-semibold">{error} Check console.</div>}
+      
+      {/* 1. Summary Stats Section (Unchanged) */}
       <section className="mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-        <SummaryStatCard
-          title="Total Nodes"
-          value={summaryStats.totalNodes}
-          icon={<LuHardDrive />}
-        />
-        <SummaryStatCard
-          title="Unique Sensor Types"
-          value={summaryStats.uniqueSensorTypes}
-          icon={<LuTags />}
-        />
-        <SummaryStatCard
-          title="Total Sensor Instances"
-          value={summaryStats.totalSensorInstances}
-          icon={<LuDatabaseZap />}
-        />
+        {/* MODIFIED: LuHardDrive is not imported, so using LuDatabaseZap as a placeholder */}
+        <SummaryStatCard title="Total Nodes" value={summaryStats.totalNodes} icon={<LuDatabaseZap />} />
+        <SummaryStatCard title="Unique Sensor Types" value={summaryStats.uniqueSensorTypes} icon={<LuTags />} />
+        <SummaryStatCard title="Total Sensor Instances" value={summaryStats.totalSensorInstances} icon={<LuDatabaseZap />} />
       </section>
 
+      {/* --- 2. MERGED Sensor Summary Section --- */}
       <section className="mb-12 p-6 bg-white rounded-lg shadow-md">
+        
+        {/* Header & Dropdowns */}
         <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
           <h2 className="text-2xl font-semibold">Sensor Summary</h2>
           <div className="flex items-center gap-4">
-            <select
-              value={selectedSensor}
-              onChange={handleSensorChange}
-              className="p-2 border rounded-md bg-gray-50"
-            >
-              <option value="" disabled>
-                {allSensors.length > 0 ? '-- Sensor --' : 'Loading...'}
-              </option>
-              {allSensors.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-            <select
-              value={timeRange}
-              onChange={(e) => setTimeRange(e.target.value)}
-              className="p-2 border rounded-md bg-gray-50"
-            >
-              {rangeOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            <select value={selectedSensor} onChange={handleSensorChange} className="p-2 border rounded-md bg-gray-50"><option value="" disabled>{allSensors.length>0?'-- Sensor --':'Loading...'}</option>{allSensors.map((s)=>(<option key={s} value={s}>{s}</option>))}</select>
+            <select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} className="p-2 border rounded-md bg-gray-50">{rangeOptions.map((o)=>(<option key={o.value} value={o.value}>{o.label}</option>))}</select>
           </div>
         </div>
-        <SummaryGraph
+
+        {/* --- Latest Readings (MOVED INSIDE) --- */}
+        {selectedSensor && (
+          <div className="mt-6 mb-8"> 
+            <h3 className="text-lg font-semibold text-gray-700 mb-3">
+              Latest Readings: <span className="capitalize text-blue-600">{selectedSensor}</span>
+            </h3>
+            {graphLoading && latestNodeData.length === 0 ? (
+              <div className="p-4 bg-gray-50 rounded-lg text-gray-500 text-sm">Loading latest data...</div>
+            ) : latestNodeData.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {latestNodeData.map(data => (
+                  <LatestDataCard
+                    key={data.nodeId}
+                    nodeId={data.nodeId}
+                    value={data.value}
+                    timestamp={data.timestamp}
+                    sensorKey={selectedSensor}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="p-4 bg-gray-50 rounded-lg text-gray-500 text-sm">
+                No recent data found for this sensor.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- Sensor History (Graph) --- */}
+        {selectedSensor && (
+          <h3 className="text-lg font-semibold text-gray-700 mb-3">
+            Sensor History
+          </h3>
+        )}
+        <SummaryGraph 
           selectedSensor={selectedSensor}
-          timeRange={timeRange}
-          nodeColors={lineColors}
-          triggerRefetch={graphRefetchTrigger}
+          nodeColors={lineColors} 
+          rawGraphData={rawGraphData}
+          isLoading={graphLoading}
+          error={graphError}
         />
       </section>
 
-      <section>
-        <h2 className="text-2xl font-semibold mb-6">Node Overview</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {nodes.map((n) => (
-            <Link to={`/node/${n.nodeId}`} key={n.nodeId}>
-              <NodeCard node={n} />
-            </Link>
-          ))}
-        </div>
-      </section>
+      {/* --- 3. Node Overview Section (REMOVED) --- */}
+      
     </div>
   );
 };

@@ -1,3 +1,5 @@
+// File: src/Reports.js
+
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { jsPDF } from 'jspdf';
@@ -6,247 +8,295 @@ import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend,
 } from 'chart.js';
+import 'chartjs-adapter-date-fns'; // Import adapter
 
-// Register Chart.js components (needed for react-chartjs-2)
+// Register Chart.js components
 ChartJS.register(
   CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend
 );
 
 const API_URL = 'http://127.0.0.1:8000';
 
+/**
+ * Converts an ISO 8601 string (or Date object) into the format
+ * required by <input type="datetime-local"> (YYYY-MM-DDTHH:MM)
+ * in the *user's local timezone*.
+ */
+const formatDateTimeForInput = (dateString) => {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    // Pad numbers to 2 digits (e.g., 9 -> "09")
+    const pad = (num) => num.toString().padStart(2, '0');
+    
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1); // getMonth() is 0-indexed
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    
+    // Returns format YYYY-MM-DDTHH:MM
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  } catch (e) {
+    console.error("Failed to format date:", dateString, e);
+    return '';
+  }
+};
+
+
 const Reports = () => {
-  // State for the list of nodes
   const [nodes, setNodes] = useState([]);
-  // State for the currently selected node
   const [selectedNode, setSelectedNode] = useState('');
-  // Loading and error states
+  
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+
+  // State for the node's valid time range
+  const [nodeTimeRange, setNodeTimeRange] = useState({ min: '', max: '' });
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  // State to hold the data for the charts we'll generate
   const [chartConfigs, setChartConfigs] = useState([]);
-  // Refs to access the <Line> component's chart instance
-  const chartRefs = useRef([]);
+  const chartRefs = useRef([]); // To hold refs to the chart instances
 
-  // 1. Fetch all nodes for the dropdown when the page loads
+  // 1. Fetch all nodes for the dropdown
   useEffect(() => {
     const fetchNodes = async () => {
       try {
         const response = await axios.get(`${API_URL}/api/nodes`);
         setNodes(response.data);
-      } catch (err) {
-        console.error("Failed to fetch nodes", err);
-      }
+      } catch (err) { console.error("Failed to fetch nodes", err); }
     };
     fetchNodes();
   }, []);
 
-  // 2. Helper function to fetch data for the selected node
-  const fetchNodeData = async (nodeId) => {
-    if (!nodeId) {
-      setError('Please select a node first.');
-      return null;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axios.get(`${API_URL}/api/nodes/${nodeId}/readings`);
-      return response.data;
-    } catch (err) {
-      setError('Failed to fetch data for this node.');
-      return null;
-    }
-  };
-
-  // 3. Handle CSV Generation
-  const handleGenerateCSV = async () => {
-    const data = await fetchNodeData(selectedNode);
-    if (!data || data.length === 0) {
-      setLoading(false);
-      if (!error) setError("No data found for this node.");
+  // 2. Effect to fetch the time range when a node is selected
+  useEffect(() => {
+    if (!selectedNode) {
+      setNodeTimeRange({ min: '', max: '' });
+      setStartTime('');
+      setEndTime('');
       return;
     }
 
-    // Flatten the data from { timestamp, sensorData: { temp, pH } }
-    // to { timestamp, temp, pH }
-    const flatData = data.map(reading => ({
-      timestamp: new Date(reading.timestamp).toLocaleString(),
-      ...reading.sensorData
-    }));
+    const fetchTimeRange = async () => {
+      setError(null); // Clear previous errors
+      try {
+        const response = await axios.get(`${API_URL}/api/nodes/${selectedNode}/time_range`);
+        const { firstSeen, lastSeen } = response.data;
 
-    // Convert JSON to CSV string
+        if (firstSeen && lastSeen) {
+          const minDate = formatDateTimeForInput(firstSeen);
+          const maxDate = formatDateTimeForInput(lastSeen);
+          
+          setNodeTimeRange({ min: minDate, max: maxDate });
+          // Auto-fill the start/end times to the node's full range
+          setStartTime(minDate);
+          setEndTime(maxDate);
+        } else {
+          setError("This node has no data to report.");
+          setNodeTimeRange({ min: '', max: '' });
+        }
+      } catch (err) {
+        console.error("Failed to fetch time range", err);
+        setError("Could not fetch data range for this node.");
+        setNodeTimeRange({ min: '', max: '' });
+      }
+    };
+
+    fetchTimeRange();
+  }, [selectedNode]); // This effect runs when selectedNode changes
+
+
+  // 3. Helper function to fetch data for the selected node & time range
+  const fetchNodeData = async (nodeId, start, end) => {
+    if (!nodeId) { setError('Please select a node first.'); return null; }
+    setLoading(true); setError(null);
+    
+    const params = new URLSearchParams();
+    
+    // --- TIMEZONE FIX ---
+    // Append 'Z' to treat the local datetime string as UTC
+    if (start) params.append('start_time', start + 'Z');
+    if (end) params.append('end_time', end + 'Z');
+    // --- END FIX ---
+    
+    const query = params.toString();
+    const requestUrl = `${API_URL}/api/nodes/${nodeId}/readings?${query}`;
+
+    try {
+      const response = await axios.get(requestUrl);
+      if (response.data.length === 0) {
+         setError("No data found for this node and time range.");
+         setLoading(false); // Make sure to stop loading
+         return null;
+      }
+      return response.data;
+    } catch (err) { 
+      setError('Failed to fetch data for this node.'); 
+      console.error(err); 
+      setLoading(false); // Make sure to stop loading on error
+      return null; 
+    }
+  };
+
+  // 4. Handle CSV Generation
+  const handleGenerateCSV = async () => {
+    const data = await fetchNodeData(selectedNode, startTime, endTime);
+    if (!data) { // fetchNodeData returns null on error or no data
+      setLoading(false);
+      return;
+    }
+    
+    const flatData = data.map(r => ({ timestamp: new Date(r.timestamp).toLocaleString(), ...r.sensorData }));
     const csv = Papa.unparse(flatData);
-
-    // Create a blob and trigger download
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
     link.setAttribute('download', `${selectedNode}_data.csv`);
-    link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-
     setLoading(false);
   };
 
-  // 4. Handle PDF Generation (Step 1: Fetch and prepare data)
+  // 5. Handle PDF Generation (Step 1: Fetch and prepare)
   const handleGeneratePDF = async () => {
-    const data = await fetchNodeData(selectedNode);
-    if (!data || data.length === 0) {
+    const data = await fetchNodeData(selectedNode, startTime, endTime);
+    if (!data) { // fetchNodeData returns null on error or no data
       setLoading(false);
-      if (!error) setError("No data found for this node.");
       return;
     }
-
-    // Process data into chart.js format
-    const sensorKeys = Object.keys(data[0].sensorData);
-    const labels = data.map(d => new Date(d.timestamp).toLocaleDateString()); // Use shorter date labels for PDF
+    
+    // Robustly find all sensor keys
+    const sensorKeys = Array.from(new Set(data.flatMap(d => d.sensorData ? Object.keys(d.sensorData) : [])));
+    const labels = data.map(d => new Date(d.timestamp).toLocaleString()); // Use readable labels
 
     const configs = sensorKeys.map(key => ({
       sensorName: key,
       data: {
         labels,
         datasets: [{
-          label: key,
-          data: data.map(d => d.sensorData[key]),
-          borderColor: `rgb(${Math.floor(Math.random() * 255)}, ${Math.floor(Math.random() * 255)}, ${Math.floor(Math.random() * 255)})`,
-          tension: 0.1,
-          pointRadius: 1,
+          label: key, data: data.map(d => d.sensorData[key] ?? null),
+          borderColor: `rgb(${Math.floor(Math.random()*255)}, ${Math.floor(Math.random()*255)}, ${Math.floor(Math.random()*255)})`,
+          tension: 0.1, pointRadius: 1, spanGaps: true,
         }],
       },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { position: 'top' },
-          title: { display: true, text: `Sensor: ${key.toUpperCase()}` },
-        },
-        animation: {
-          duration: 0 // Disable animation for faster image capture
-        }
+      options: { 
+        responsive: true, 
+        plugins: { legend: { position: 'top' }, title: { display: true, text: `Sensor: ${key.toUpperCase()}` }, }, 
+        animation: { duration: 0 } // No animation for PDF capture
       },
     }));
-
-    // Reset refs array
+    
     chartRefs.current = new Array(configs.length);
-    // Set the configs, which will render the hidden charts
-    setChartConfigs(configs);
-    // The useEffect hook below will handle the rest
+    setChartConfigs(configs); // This triggers the useEffect below
   };
 
-  // 5. Handle PDF Generation (Step 2: Create PDF after charts are rendered)
+  // 6. Handle PDF Generation (Step 2: Create PDF after charts render)
   useEffect(() => {
-    // This effect runs when `chartConfigs` changes and we are in `loading` state
-    if (chartConfigs.length === 0 || !loading) return;
-
-    // Wait a brief moment for React to render the hidden charts
+    if (chartConfigs.length === 0 || !loading) return; // Only run if we are loading and have configs
+    
     const timer = setTimeout(() => {
       try {
         const doc = new jsPDF();
         doc.text(`Sensor Report for ${selectedNode}`, 14, 15);
-        let yPos = 25;
+        if (startTime) doc.text(`Start: ${new Date(startTime).toLocaleString()}`, 14, 22);
+        if (endTime) doc.text(`End: ${new Date(endTime).toLocaleString()}`, 14, 29);
+        let yPos = 40; // Start lower
 
-        chartRefs.current.forEach((chartInstance, index) => {
-          if (chartInstance) {
-            // Get the chart's canvas as a Base64 image
+        chartRefs.current.forEach((chartInstance) => {
+          if (chartInstance) { // Check if ref is set
             const imgData = chartInstance.toBase64Image();
-            
-            // Add a new page if the chart won't fit
-            if (yPos + 100 > 280) { // 280 is close to bottom of A4 page
-              doc.addPage();
-              yPos = 15; // Reset Y position
-            }
-
-            doc.addImage(imgData, 'PNG', 10, yPos, 190, 100); // Add image to PDF
-            yPos += 110; // Move down for the next chart
+            if (yPos + 100 > 280) { doc.addPage(); yPos = 15; } // Page break
+            doc.addImage(imgData, 'PNG', 10, yPos, 190, 100); // Add chart image
+            yPos += 110;
           }
         });
-
-        doc.save(`${selectedNode}_report.pdf`);
-
-      } catch (err) {
-        console.error(err);
-        setError("Failed to generate PDF.");
-      }
+      doc.save(`${selectedNode}_report.pdf`);
+      } catch (err) { console.error(err); setError("Failed to generate PDF."); }
       
-      // Clean up
-      setLoading(false);
-      setChartConfigs([]);
+      // Cleanup
+      setLoading(false); 
+      setChartConfigs([]); 
       chartRefs.current = [];
     }, 500); // 500ms delay to ensure canvas is rendered
-
-    return () => clearTimeout(timer); // Cleanup timer if component unmounts
-
-  }, [chartConfigs, loading, selectedNode]); // Dependencies for the effect
+    
+    return () => clearTimeout(timer); // Cleanup timer
+  }, [chartConfigs, loading, selectedNode, startTime, endTime]);
 
   return (
     <div>
       <h1 className="text-4xl font-bold mb-8">Report Generation</h1>
-      
-      {/* --- Control Panel --- */}
-      <div className="bg-white p-6 rounded-lg shadow-md">
-        <div className="flex flex-col md:flex-row md:items-end gap-4">
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <div className="flex flex-col md:flex-row gap-4 mb-4">
           
-          {/* Node Selector */}
-          <div className="flex-1">
-            <label htmlFor="node-select" className="block text-sm font-medium text-gray-700 mb-1">
-              Select Node
-            </label>
-            <select
-              id="node-select"
-              value={selectedNode}
-              onChange={(e) => {
-                setSelectedNode(e.target.value);
-                setError(null);
-              }}
-              className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm 
-                         focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-            >
-              <option value="">-- Please choose a node --</option>
-              {nodes.map(node => (
-                <option key={node.nodeId} value={node.nodeId}>
-                  {node.nodeId}
-                </option>
-              ))}
-            </select>
-          </div>
+            {/* Node Selector */}
+            <div className="md:flex-[2]">
+              <label htmlFor="node-select" className="block text-sm font-medium text-gray-700 mb-1">
+                Select Node
+              </label>
+              <select
+                id="node-select" value={selectedNode}
+                onChange={(e) => { setSelectedNode(e.target.value); setError(null); setStartTime(''); setEndTime(''); }}
+                className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+              >
+                <option value="">-- Please choose a node --</option>
+                {nodes.map(node => ( <option key={node.nodeId} value={node.nodeId}>{node.nodeId}</option> ))}
+              </select>
+            </div>
 
-          {/* Buttons */}
-          <button
-            onClick={handleGenerateCSV}
-            disabled={loading || !selectedNode}
-            className="px-4 py-2 bg-green-600 text-white rounded-md font-semibold
-                       hover:bg-green-700 transition-colors disabled:bg-gray-400"
-          >
-            {loading ? 'Working...' : 'Generate CSV'}
-          </button>
-          
-          <button
-            onClick={handleGeneratePDF}
-            disabled={loading || !selectedNode}
-            className="px-4 py-2 bg-red-600 text-white rounded-md font-semibold
-                       hover:bg-red-700 transition-colors disabled:bg-gray-400"
-          >
-            {loading ? 'Working...' : 'Generate PDF'}
-          </button>
+            {/* Start Time Selector */}
+            <div className="flex-1">
+              <label htmlFor="start-time" className="block text-sm font-medium text-gray-700 mb-1">
+                Start Time
+              </label>
+              <input
+                type="datetime-local" id="start-time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                min={nodeTimeRange.min}
+                max={nodeTimeRange.max || formatDateTimeForInput(new Date())}
+                disabled={!selectedNode}
+                className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+              />
+            </div>
+
+            {/* End Time Selector */}
+            <div className="flex-1">
+              <label htmlFor="end-time" className="block text-sm font-medium text-gray-700 mb-1">
+                End Time
+              </label>
+              <input
+                type="datetime-local" id="end-time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                min={nodeTimeRange.min}
+                max={nodeTimeRange.max || formatDateTimeForInput(new Date())}
+                disabled={!selectedNode}
+                className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+              />
+            </div>
+          </div>
+        
+          {/* Buttons and Messages */}
+          <div className="flex flex-wrap items-center gap-4">
+            <button onClick={handleGenerateCSV} disabled={loading || !selectedNode} className="px-4 py-2 bg-green-600 text-white rounded-md font-semibold hover:bg-green-700 transition-colors disabled:bg-gray-400">
+              {loading ? 'Working...' : 'Generate CSV'}
+            </button>
+            <button onClick={handleGeneratePDF} disabled={loading || !selectedNode} className="px-4 py-2 bg-red-600 text-white rounded-md font-semibold hover:bg-red-700 transition-colors disabled:bg-gray-400">
+              {loading ? 'Working...' : 'Generate PDF'}
+            </button>
+            {loading && <div className="text-blue-600">Generating report...</div>}
+            {error && <div className="text-red-600">{error}</div>}
+          </div>
         </div>
         
-        {/* --- Messages --- */}
-        {loading && <div className="mt-4 text-blue-600">Generating report...</div>}
-        {error && <div className="mt-4 text-red-600">{error}</div>}
-      </div>
-
-      {/* --- Hidden Chart Renderer --- */}
-      {/* This div renders the charts off-screen so we can capture their images */}
+      {/* Hidden Chart Renderer */}
       <div className="absolute -left-[9999px] w-[800px]">
         {chartConfigs.map((config, index) => (
-          <Line
-            key={index}
-            ref={(el) => (chartRefs.current[index] = el)} // Assign ref
-            data={config.data}
-            options={config.options}
-          />
+          <Line key={index} ref={(el) => (chartRefs.current[index] = el)} data={config.data} options={config.options} />
         ))}
       </div>
     </div>
