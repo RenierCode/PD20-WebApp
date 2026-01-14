@@ -1,6 +1,6 @@
 // File: src/components/SensorGraph.js
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { Line } from 'react-chartjs-2';
 import { LuClock } from 'react-icons/lu';
@@ -46,7 +46,7 @@ const BRIGHT_COLORS = [
   '#911EB4', '#46F0F0', '#F032E6', '#FFE119',
 ];
 
-const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnomalies }) => {
+const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnomalies, onAnomalyNotification, anomalyCount = 0, onShowAnomalyDetails }) => {
     const [rangeIndex, setRangeIndex] = useState(0);
     const [chartData, setChartData] = useState({ datasets: [] });
     // Separate loading states
@@ -58,6 +58,9 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
       const randomIndex = Math.floor(Math.random() * BRIGHT_COLORS.length);
       return BRIGHT_COLORS[randomIndex];
     });
+
+        // Track last anomaly count so we don't spam notifications
+        const lastAnomalyCountRef = useRef(0);
 
     // Safer way to get last data point
     const lastDataPoint = chartData?.datasets?.[0]?.data.length > 0
@@ -100,25 +103,50 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
                 ? Promise.resolve(initialData)
                 : axios.get(`${API_URL}/api/nodes/${nodeId}/readings?range=${activeRange.key}&sensor=${sensorKey}`).then(res => res.data);
 
-            // Promise for anomalies (only if requested)
-            let anomalyPromise = showAnomalies
-                ? axios.get(`${API_URL}/api/nodes/${nodeId}/anomalies?range=${activeRange.key}&sensor=${sensorKey}`).then(res => res.data)
-                : Promise.resolve([]);
-
-            // Wait for both
-            const [readingsData, anomalyData] = await Promise.all([readingsPromise, anomalyPromise]);
+            // Wait for readings
+            const readingsData = await readingsPromise;
 
             // Format main line data
             const finalChartData = formatChartData(readingsData);
 
-            // Add anomaly dataset if data exists
-            if (anomalyData?.length > 0) {
-                finalChartData.datasets.push({
-                    label: 'Anomaly',
-                    data: anomalyData.map(d => ({ x: new Date(d.timestamp), y: d.value })),
-                    backgroundColor: '#FF0000', borderColor: '#FF0000',
-                    pointRadius: 6, pointHoverRadius: 8, showLine: false,
-                });
+            // If anomalies should be shown, extract them from readingsData
+            if (showAnomalies) {
+                const anomalyPoints = (readingsData || []).filter(d => d && d.anomalies && Array.isArray(d.anomalies) && d.anomalies.includes(sensorKey) && d.sensorData && d.sensorData[sensorKey] != null)
+                    .map(d => ({ x: new Date(d.timestamp), y: d.sensorData[sensorKey] }));
+                if (anomalyPoints.length > 0) {
+                    finalChartData.datasets.push({
+                        label: 'Anomaly',
+                        data: anomalyPoints,
+                        backgroundColor: '#FF0000', borderColor: '#FF0000',
+                        pointRadius: 6, pointHoverRadius: 8, showLine: false,
+                    });
+
+                    // Notify parent about anomalies (avoid repeated notifications)
+                    try {
+                        if (onAnomalyNotification) {
+                            const count = anomalyPoints.length;
+                            const last = lastAnomalyCountRef.current || 0;
+                            if (count !== last) {
+                                const anomaliesPayload = anomalyPoints.map(p => ({ timestamp: p.x.toISOString(), value: p.y }));
+                                onAnomalyNotification({
+                                    sensorKey,
+                                    count,
+                                    anomalies: anomaliesPayload,
+                                    message: `${count} anomaly${count !== 1 ? 'ies' : ''} detected for ${sensorKey}`,
+                                    nodeId
+                                });
+                                lastAnomalyCountRef.current = count;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Error sending anomaly notification', e);
+                    }
+                } else {
+                    // If previously had anomalies but now cleared, reset counter
+                    if (lastAnomalyCountRef.current && lastAnomalyCountRef.current > 0) {
+                        lastAnomalyCountRef.current = 0;
+                    }
+                }
             }
 
             setChartData(finalChartData); // Update the chart state
@@ -138,6 +166,32 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
         fetchData(false); // Fetch as non-poll on these changes
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [rangeIndex, showAnomalies]); // Dependencies are rangeIndex and showAnomalies, fetchData is called but doesn't need to be dependency here
+
+    // If the parent passes updated `initialData` (NodeDetailPage polling), update chart immediately
+    useEffect(() => {
+        if (rangeIndex !== 0 || !initialData) return;
+        try {
+            const finalChartData = formatChartData(initialData);
+
+            if (showAnomalies) {
+                const anomalyPoints = (initialData || []).filter(d => d && d.anomalies && Array.isArray(d.anomalies) && d.anomalies.includes(sensorKey) && d.sensorData && d.sensorData[sensorKey] != null)
+                    .map(d => ({ x: new Date(d.timestamp), y: d.sensorData[sensorKey] }));
+                if (anomalyPoints.length > 0) {
+                    finalChartData.datasets.push({
+                        label: 'Anomaly',
+                        data: anomalyPoints,
+                        backgroundColor: '#FF0000', borderColor: '#FF0000',
+                        pointRadius: 6, pointHoverRadius: 8, showLine: false,
+                    });
+                }
+            }
+
+            setChartData(finalChartData);
+        } catch (e) {
+            // ignore formatting errors here
+            console.error('Failed to apply initialData to chart', e);
+        }
+    }, [initialData, rangeIndex, showAnomalies, sensorKey, formatChartData]);
 
 
     // --- Polling useEffect ---
@@ -223,6 +277,20 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
                 </button>
                 <div className="flex items-center gap-4">
                     {showAnomalies && (<FaExclamationTriangle size={16} className="text-red-500" title="Anomaly detection active" />)}
+                    {/* Per-sensor anomaly badge (shows count and opens details via callback) */}
+                    {anomalyCount > 0 && (
+                        <div className="flex items-center gap-2">
+                            <div className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded-md text-sm font-semibold">
+                                {anomalyCount}
+                            </div>
+                            <button
+                                onClick={() => onShowAnomalyDetails && onShowAnomalyDetails(sensorKey)}
+                                className="text-xs px-2 py-0.5 bg-white border border-red-200 rounded-md text-red-600 font-medium"
+                            >
+                                Show details
+                            </button>
+                        </div>
+                    )}
                     {/* Show subtle polling indicator only during background polls */}
                     {isPolling && !isInitialLoading && <span className="text-xs text-gray-500">Updating...</span>}
                     {/* Show main loading indicator only on initial/manual fetch */}

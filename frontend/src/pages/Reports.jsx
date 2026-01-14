@@ -140,6 +140,28 @@ const Reports = () => {
     }
   };
 
+  // Fetch the next reading at or after `time` (used to include one more data forward than end time)
+  const getNextReading = async (nodeId, time) => {
+    if (!nodeId || !time) return null;
+    try {
+      const params = new URLSearchParams();
+      params.append('start_time', time + 'Z');
+      const resp = await axios.get(`${API_URL}/api/nodes/${nodeId}/readings?${params.toString()}`);
+      const arr = resp.data || [];
+      if (arr.length === 0) return null;
+      const endDate = new Date(time);
+      // Return the first reading strictly after the end time, or if none, null
+      for (let r of arr) {
+        const t = new Date(r.timestamp);
+        if (t > endDate) return r;
+      }
+      return null;
+    } catch (err) {
+      console.error('Failed to fetch next reading', err);
+      return null;
+    }
+  };
+
   // 4. Handle CSV Generation
   const handleGenerateCSV = async () => {
     const data = await fetchNodeData(selectedNode, startTime, endTime);
@@ -147,14 +169,29 @@ const Reports = () => {
       setLoading(false);
       return;
     }
-    
-    const flatData = data.map(r => ({ timestamp: new Date(r.timestamp).toLocaleString(), ...r.sensorData }));
+    // Include one additional reading after endTime when available
+    if (endTime) {
+      const next = await getNextReading(selectedNode, endTime);
+      if (next) data.push(next);
+    }
+
+    const flatData = data.map(r => ({
+      timestamp: new Date(r.timestamp).toLocaleString(),
+      // Flatten sensor data fields
+      ...r.sensorData,
+      // Include anomalies as a string (join array) or fallback to legacy boolean
+      anomalies: Array.isArray(r.anomalies) ? r.anomalies.join(';') : (r.anomaly ? 'ALL_SENSORS' : '')
+    }));
     const csv = Papa.unparse(flatData);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `${selectedNode}_data.csv`);
+    // Include start/end in filename (sanitize colons)
+    const safe = (s) => s ? s.replace(/:/g, '-') : '';
+    const sPart = startTime ? safe(startTime) : 'start';
+    const ePart = endTime ? safe(endTime) : 'end';
+    link.setAttribute('download', `${selectedNode}_${sPart}_${ePart}_data.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -168,28 +205,46 @@ const Reports = () => {
       setLoading(false);
       return;
     }
-    
+    // Include one additional reading after endTime when available
+    if (endTime) {
+      const next = await getNextReading(selectedNode, endTime);
+      if (next) data.push(next);
+    }
     // Robustly find all sensor keys
     const sensorKeys = Array.from(new Set(data.flatMap(d => d.sensorData ? Object.keys(d.sensorData) : [])));
     const labels = data.map(d => new Date(d.timestamp).toLocaleString()); // Use readable labels
 
-    const configs = sensorKeys.map(key => ({
-      sensorName: key,
-      data: {
-        labels,
-        datasets: [{
-          label: key, data: data.map(d => d.sensorData[key] ?? null),
-          borderColor: `rgb(${Math.floor(Math.random()*255)}, ${Math.floor(Math.random()*255)}, ${Math.floor(Math.random()*255)})`,
-          tension: 0.1, pointRadius: 1, spanGaps: true,
-        }],
-      },
-      options: { 
-        responsive: true, 
-        plugins: { legend: { position: 'top' }, title: { display: true, text: `Sensor: ${key.toUpperCase()}` }, }, 
-        animation: { duration: 0 } // No animation for PDF capture
-      },
-    }));
-    
+    // Build chart configs with per-point anomaly highlighting and counts
+    const configs = sensorKeys.map(key => {
+      const values = data.map(d => d.sensorData ? (d.sensorData[key] ?? null) : null);
+      const mask = data.map(d => Array.isArray(d.anomalies) ? d.anomalies.includes(key) : !!d.anomaly);
+      const pointBackgroundColor = mask.map(m => m ? 'rgba(220,53,69,0.9)' : 'rgba(54,162,235,0.7)');
+      const pointRadius = mask.map(m => m ? 4 : 1);
+      const anomalyCount = mask.filter(Boolean).length;
+
+      return {
+        sensorName: key,
+        anomalyCount,
+        data: {
+          labels,
+          datasets: [{
+            label: key,
+            data: values,
+            borderColor: `rgb(${Math.floor(Math.random()*200)}, ${Math.floor(Math.random()*200)}, ${Math.floor(Math.random()*200)})`,
+            tension: 0.1,
+            spanGaps: true,
+            pointBackgroundColor,
+            pointRadius,
+          }],
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { position: 'top' }, title: { display: true, text: `Sensor: ${key.toUpperCase()}` }, },
+          animation: { duration: 0 },
+        },
+      };
+    });
+
     chartRefs.current = new Array(configs.length);
     setChartConfigs(configs); // This triggers the useEffect below
   };
@@ -206,7 +261,17 @@ const Reports = () => {
         if (endTime) doc.text(`End: ${new Date(endTime).toLocaleString()}`, 14, 29);
         let yPos = 40; // Start lower
 
-        chartRefs.current.forEach((chartInstance) => {
+        // For each chart, print the sensor name + anomaly count, then the chart image
+        chartRefs.current.forEach((chartInstance, idx) => {
+          const cfg = chartConfigs[idx];
+          if (cfg) {
+            const titleLine = `${cfg.sensorName.toUpperCase()} — Anomalies: ${cfg.anomalyCount}`;
+            if (yPos + 8 > 280) { doc.addPage(); yPos = 15; }
+            doc.setFontSize(11);
+            doc.text(titleLine, 14, yPos);
+            yPos += 8;
+          }
+
           if (chartInstance) { // Check if ref is set
             const imgData = chartInstance.toBase64Image();
             if (yPos + 100 > 280) { doc.addPage(); yPos = 15; } // Page break
@@ -214,7 +279,11 @@ const Reports = () => {
             yPos += 110;
           }
         });
-      doc.save(`${selectedNode}_report.pdf`);
+      // Include start/end in filename (sanitize colons)
+      const safe = (s) => s ? s.replace(/:/g, '-') : '';
+      const sPart = startTime ? safe(startTime) : 'start';
+      const ePart = endTime ? safe(endTime) : 'end';
+      doc.save(`${selectedNode}_${sPart}_${ePart}_report.pdf`);
       } catch (err) { console.error(err); setError("Failed to generate PDF."); }
       
       // Cleanup

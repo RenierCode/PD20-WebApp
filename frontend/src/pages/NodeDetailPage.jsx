@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'; // Import useCallback and useMemo
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'; // Import useCallback and useMemo
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import SensorGraph from '../components/SensorGraph'; 
@@ -33,6 +33,14 @@ const NodeDetailPage = () => {
   
   // State to control anomaly detection for all graphs
   const [showAnomalies, setShowAnomalies] = useState(false);
+  const [anomalyNotification, setAnomalyNotification] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSensorKey, setModalSensorKey] = useState(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastTimerRef = useRef(null);
+  const [isDetecting, setIsDetecting] = useState(false);
+
+  
 
   // --- MODIFIED: fetchInitialData is wrapped in useCallback ---
   // We add 'isPoll' to avoid resetting the main loading spinner
@@ -111,12 +119,85 @@ const NodeDetailPage = () => {
   }, [initialData, sensorKeys]);
   
   // Handler for the button (Unchanged)
-  const toggleAnomalies = () => {
-    setShowAnomalies(prev => !prev);
+  const toggleAnomalies = async () => {
+    // If anomalies are currently shown, hide and clear notification
+    if (showAnomalies) {
+      setShowAnomalies(false);
+      setAnomalyNotification(null);
+      return;
+    }
+
+    // Otherwise, fetch fresh readings from backend and detect anomalies
+    setIsDetecting(true);
+    setAnomalyNotification(null);
+    try {
+      const resp = await axios.get(`${API_URL}/api/nodes/${nodeId}/readings?range=latest24h`);
+      const readings = resp.data || [];
+
+      // Build a flat list of anomalies per sensor from reading.anomalies (preferred)
+      // Fallback: if reading.anomalies missing but reading.anomaly truthy, infer per-sensor flags using THRESHOLDS
+      const anomalies = [];
+      readings.forEach(r => {
+          const flagged = Array.isArray(r?.anomalies) ? r.anomalies : [];
+        if (Array.isArray(flagged) && flagged.length > 0 && r.sensorData) {
+          flagged.forEach(k => {
+            const val = r.sensorData?.[k];
+            if (val != null) {
+              anomalies.push({ sensorKey: k, timestamp: r.timestamp, value: val });
+            }
+          });
+        }
+      });
+
+      if (anomalies.length > 0) {
+        const bySensor = {};
+        anomalies.forEach(a => {
+          if (!bySensor[a.sensorKey]) bySensor[a.sensorKey] = [];
+          bySensor[a.sensorKey].push(a);
+        });
+        setAnomalyNotification({ totalCount: anomalies.length, bySensor });
+        setShowAnomalies(true); // Also enable anomaly visuals in graphs
+      } else {
+        // Provide user feedback: no anomalies found
+        setAnomalyNotification({ totalCount: 0, bySensor: {} });
+        setShowAnomalies(false);
+      }
+    } catch (err) {
+      console.error('Error detecting anomalies on NodeDetailPage', err);
+      setError('Failed to detect anomalies.');
+    } finally {
+      setIsDetecting(false);
+    }
   };
 
-  // Show initial loading screen
-  if (loading) return <div>Loading data...</div>;
+    // Show a transient toast whenever anomalyNotification is set
+    useEffect(() => {
+      // Clear any existing timer
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      if (anomalyNotification) {
+        setToastVisible(true);
+        toastTimerRef.current = setTimeout(() => {
+          setToastVisible(false);
+          toastTimerRef.current = null;
+        }, 5000);
+      } else {
+        setToastVisible(false);
+      }
+
+      return () => {
+        if (toastTimerRef.current) {
+          clearTimeout(toastTimerRef.current);
+          toastTimerRef.current = null;
+        }
+      };
+    }, [anomalyNotification]);
+
+    // Show initial loading screen
+    if (loading) return <div>Loading data...</div>;
 
   return (
     <div>
@@ -136,10 +217,24 @@ const NodeDetailPage = () => {
                      ? 'bg-red-500 hover:bg-red-600 text-white' 
                      : 'bg-blue-500 hover:bg-blue-600 text-white'}`}
          onClick={toggleAnomalies}
+         disabled={isDetecting}
         >
-          {showAnomalies ? 'Hide Anomalies' : 'Detect Anomalies'}
+          {isDetecting ? 'Detecting...' : (showAnomalies ? 'Hide Anomalies' : 'Detect Anomalies')}
         </button>
       </div>
+
+      {/* Transient toast notification (appears for 5s) */}
+      {toastVisible && anomalyNotification && (
+        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-50">
+          <div className={`max-w-sm w-full border rounded-md shadow-md px-4 py-3 flex items-center gap-3 ${anomalyNotification.totalCount > 0 ? 'bg-red-50 border-red-100 text-red-700' : 'bg-yellow-50 border-yellow-100 text-yellow-700'}`}>
+            <div className="flex-1">
+              <div className="font-semibold text-sm">{anomalyNotification.totalCount > 0 ? `${anomalyNotification.totalCount} anomaly${anomalyNotification.totalCount !== 1 ? 'ies' : ''} detected` : 'No anomalies found'}</div>
+              {anomalyNotification.totalCount > 0 && <div className="text-xs text-gray-600">Click a sensor's "Show details" to view specific anomalies.</div>}
+            </div>
+            <button onClick={() => setToastVisible(false)} className="text-sm px-2 py-1 bg-white border rounded-md">Close</button>
+          </div>
+        </div>
+      )}
 
       {/* --- Latest Readings Section (Updates via polling) --- */}
       <section className="mb-8">
@@ -177,6 +272,12 @@ const NodeDetailPage = () => {
                   initialData={initialData} // This prop now updates from polling
                   className={itemClassName}
                   showAnomalies={showAnomalies}
+                  anomalyCount={anomalyNotification?.bySensor?.[key]?.length || 0}
+                  onShowAnomalyDetails={(sensor) => {
+                    // Open modal with details for this sensor
+                    setModalSensorKey(sensor);
+                    setModalOpen(true);
+                  }}
                 />
               );
             })
@@ -185,6 +286,34 @@ const NodeDetailPage = () => {
           )}
         </div>
       </section>
+      {/* Modal for sensor anomaly details */}
+      {modalOpen && modalSensorKey && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => setModalOpen(false)} />
+          <div className="relative bg-white rounded-md shadow-lg max-w-2xl w-full mx-4 p-6 z-10">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">Anomalies for {modalSensorKey}</h3>
+              <button onClick={() => setModalOpen(false)} className="text-sm px-2 py-1 bg-gray-100 rounded-md">Close</button>
+            </div>
+            <div className="max-h-72 overflow-auto">
+              <ul className="divide-y">
+                {(() => {
+                  const list = anomalyNotification?.bySensor?.[modalSensorKey] || [];
+                  if (list.length === 0) {
+                    return <li className="py-2 text-gray-500">No anomalies for this sensor.</li>;
+                  }
+                  return list.map((a, idx) => (
+                    <li key={idx} className="py-2 flex justify-between">
+                      <span className="text-gray-700">{new Date(a.timestamp).toLocaleString()}</span>
+                      <span className="font-mono">{a.value}</span>
+                    </li>
+                  ));
+                })()}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

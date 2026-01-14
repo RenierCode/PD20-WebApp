@@ -9,8 +9,6 @@ from datetime import datetime, timedelta
 import motor.motor_asyncio
 import uvicorn
 from functools import lru_cache
-import numpy as np
-import joblib # Using joblib for scikit-learn models
 import os # For constructing absolute paths
 
 # --- Pydantic Settings ---
@@ -40,115 +38,21 @@ readings_collection = db["sensorReadings"]
 class Node(BaseModel):
     nodeId: str; sensors: List[str]; status: str; lastSeen: Optional[datetime] = None
 class SensorReading(BaseModel):
-    nodeId: str; timestamp: datetime; sensorData: Dict[str, float]
+    nodeId: str
+    timestamp: datetime
+    sensorData: Dict[str, float]
+    anomaly: Optional[int] = 0
+    anomalies: Optional[List[str]] = None
 class NodeTimeRange(BaseModel):
     nodeId: str
     firstSeen: Optional[datetime] = None
     lastSeen: Optional[datetime] = None
 
-# --- Load Univariate Models & Scalers (using joblib) ---
-# <<< ADJUST THIS DICTIONARY TO MATCH YOUR SENSOR NAMES AND MODEL FILES >>>
-MODEL_CONFIG = {
-    "temperature": {
-        "model_path": "models/isolation_forest_model_temperature.pkl",
-        # "scaler_path": "models/temperature_scaler.pkl", # Optional
-    },
-    "pH": {
-        "model_path": "models/isolation_forest_model_pH_level.pkl",
-        # "scaler_path": "models/ph_scaler.pkl",
-    },
-    "turbidity": {
-        "model_path": "models/isolation_forest_model_turbidity.pkl",
-        # "scaler_path": "models/turbidity_scaler.pkl",
-    },
-    "flowrate": {
-        "model_path": "models/isolation_forest_model_flow_rate.pkl",
-        # "scaler_path": "models/flow_rate_scaler.pkl",
-    },
-    "waterLevel": {
-        "model_path": "models/isolation_forest_model_water_level.pkl",
-        # "scaler_path": "models/water_level_scaler.pkl",
-    },
-    # Add entries for other sensors (tds, etc.) if you have models
-}
-
-loaded_models = {}
-loaded_scalers = {} # Optional: Dictionary to hold loaded scalers
-
-print("--- Loading Anomaly Models (using joblib) ---")
-base_dir = os.path.dirname(os.path.abspath(__file__)) # Get directory of main.py
-
-for key, config in MODEL_CONFIG.items():
-    model_file_path = None; scaler_file_path = None
-    try:
-        # Construct absolute paths
-        model_file = config["model_path"]
-        model_file_path = os.path.join(base_dir, model_file)
-
-        # Load the model using joblib
-        if not os.path.exists(model_file_path):
-             raise FileNotFoundError(f"Model file not found at {model_file_path}")
-        loaded_models[key] = joblib.load(model_file_path) # <-- USE joblib.load()
-        print(f"OK: Loaded model for '{key}' from {model_file_path}")
-
-        # Optional: Load the scaler using joblib
-        if "scaler_path" in config:
-            scaler_file = config["scaler_path"]
-            scaler_file_path = os.path.join(base_dir, scaler_file)
-            if not os.path.exists(scaler_file_path):
-                 raise FileNotFoundError(f"Scaler file not found at {scaler_file_path}")
-            loaded_scalers[key] = joblib.load(scaler_file_path) # <-- USE joblib.load()
-            print(f"OK: Loaded scaler for '{key}' from {scaler_file_path}")
-
-    except FileNotFoundError as fnf_err:
-        print(f"ERROR: {fnf_err}")
-    except Exception as e:
-        # This will catch version mismatch errors
-        print(f"ERROR loading model/scaler for '{key}' using joblib: {e}")
-print("--- Model Loading Complete ---")
-
-
-# --- Anomaly Detection Function (Univariate) ---
-def detect_anomalies_univariate(readings: List[SensorReading], sensor_key: str) -> List[SensorReading]:
-    """ Uses the appropriate loaded univariate scikit-learn model. """
-    anomalies = []
-    if sensor_key not in loaded_models:
-        print(f"Warning: No model loaded for sensor '{sensor_key}'.")
-        return []
-    model = loaded_models[sensor_key]
-    scaler = loaded_scalers.get(sensor_key)
-    if not readings: return []
-
-    values_to_predict = []
-    original_readings_map = {}
-    for i, r in enumerate(readings):
-        value = r.sensorData.get(sensor_key)
-        if value is not None:
-            value_reshaped = np.array([[value]], dtype=np.float32)
-            data_point_to_use = value_reshaped
-            
-            # --- Optional: Apply Scaling ---
-            if scaler:
-                try: 
-                    data_point_to_use = scaler.transform(value_reshaped)
-                except Exception as e: 
-                    print(f"Scaling Error {sensor_key}: {e}"); continue
-            # --- End Scaling ---
-            
-            values_to_predict.append(data_point_to_use)
-            original_readings_map[len(values_to_predict) - 1] = r
-
-    if not values_to_predict: return []
-    try:
-        batch_data = np.concatenate(values_to_predict, axis=0)
-        predictions = model.predict(batch_data)
-    except Exception as e: 
-        print(f"Prediction Error ({sensor_key}): {e}"); return []
-
-    for i, prediction in enumerate(predictions):
-         if prediction == -1 and i in original_readings_map: # Check for anomaly (-1)
-             anomalies.append(original_readings_map[i])
-    return anomalies
+# Models have been removed from this deployment. Anomaly data (if present)
+# should be stored alongside sensor readings in the database under the
+# `anomaly` field (0 or 1). The endpoints below will return anomaly values
+# when present. This keeps the backend lightweight and avoids ML runtime
+# dependencies in environments where models are not available.
 
 
 # --- API Endpoints ---
@@ -202,7 +106,7 @@ async def get_node_readings(
         # 'all' adds no time filter
     # --- END OF FIX ---
 
-    projection = {"timestamp": 1, "_id": 0, "nodeId": 1}
+    projection = {"timestamp": 1, "_id": 0, "nodeId": 1, "anomaly": 1, "anomalies": 1}
     if sensor: projection[f"sensorData.{sensor}"] = 1
     else: projection["sensorData"] = 1
     
@@ -218,7 +122,7 @@ async def get_node_readings(
         if sensor and sd.get(sensor) is None: continue
         if not sd: continue
         
-        processed_readings.append(SensorReading(nodeId=node_id, timestamp=r["timestamp"], sensorData=sd))
+        processed_readings.append(SensorReading(nodeId=node_id, timestamp=r["timestamp"], sensorData=sd, anomaly=r.get("anomaly", 0), anomalies=r.get("anomalies")))
     return processed_readings
 
 
@@ -244,31 +148,29 @@ async def get_node_anomalies(
     sensor: str = Query(...), 
     range: str = Query("latest24h", enum=["latest24h", "24h", "1w", "1m", "all"])
 ):
-    """ Runs anomaly detection using the specific univariate model for the sensor. """
-    if sensor not in loaded_models:
-         print(f"No model configured for sensor '{sensor}'.")
-         return []
-
-    # --- THIS IS THE FIX ---
-    # Now we call get_node_readings, but we pass Python values (like None)
-    # instead of letting them default to Query(...) objects.
+    """Return anomaly points for a sensor using the stored `anomaly` flag on readings.
+    This endpoint no longer runs ML models; it simply returns readings where
+    the `anomaly` field is truthy and the sensor value exists.
+    """
     readings_list = await get_node_readings(
-        node_id=node_id, 
-        range=range, # This is the string "latest24h"
-        sensor=sensor, # This is the sensor string
-        start_time=None, # This is a real None
-        end_time=None # This is a real None
+        node_id=node_id,
+        range=range,
+        sensor=sensor,
+        start_time=None,
+        end_time=None
     )
-    # --- END OF FIX ---
-    
     if not readings_list: return []
 
-    try:
-        anomaly_readings = detect_anomalies_univariate(readings_list, sensor)
-    except Exception as ex:
-         print(f"ERROR running anomaly detection for {node_id}/{sensor}: {ex}")
-         raise HTTPException(status_code=500, detail="Anomaly detection error.")
-    
+    # Prefer per-reading `anomalies` array when available (flags specific sensors), otherwise fall back to boolean `anomaly`.
+    anomaly_readings = []
+    for r in readings_list:
+        if getattr(r, 'anomalies', None):
+            if sensor in (r.anomalies or []):
+                anomaly_readings.append(r)
+        elif getattr(r, 'anomaly', 0):
+            if sensor in r.sensorData:
+                anomaly_readings.append(r)
+
     results = [{"timestamp": r.timestamp, "value": r.sensorData[sensor]} for r in anomaly_readings]
     return results
 
@@ -285,5 +187,5 @@ async def get_node_time_range(node_id: str):
 
 # --- Uvicorn Server Runner ---
 if __name__ == "__main__":
-    print(f"Starting FastAPI server - Models loaded: {list(loaded_models.keys())}")
+    print("Starting FastAPI server")
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

@@ -39,9 +39,9 @@ except Exception as e:
 # or update them if they do (e.g., if you change the sensor list later).
 # This avoids deleting existing nodes.
 nodes_to_ensure = [
-    { "_id": "node-001", "sensors": ["temperature", "pH"], },
-    { "_id": "node-002", "sensors": ["temperature", "turbidity", "flowrate"], },
-    { "_id": "node-003", "sensors": ["tds"], }
+    { "_id": "node-001", "sensors": ["flowRate", "waterLevel", "pH", "turbidity", "temperature"], },
+    { "_id": "node-002", "sensors": ["flowRate", "pH", "turbidity"], },
+    { "_id": "node-003", "sensors": ["waterLevel", "temperature"], }
 ]
 
 print("Ensuring nodes exist in the database...")
@@ -61,15 +61,18 @@ def generate_sensor_reading(node):
 
     # Generate data based on the node's sensors
     if "temperature" in node["sensors"]:
-        sensor_data["temperature"] = round(25 + np.random.randn() * 2, 2)
+        # Water temperature in °C
+        sensor_data["temperature"] = round(22 + np.random.randn() * 2.5, 2)
     if "pH" in node["sensors"]:
         sensor_data["pH"] = round(7.0 + np.random.randn() * 0.3, 2)
     if "turbidity" in node["sensors"]:
-        sensor_data["turbidity"] = round(max(0, 5 + np.random.randn() * 1.5), 2)
-    if "flowrate" in node["sensors"]:
-        sensor_data["flowrate"] = round(max(0, 150 + np.random.randn() * 10), 2)
-    if "tds" in node["sensors"]:
-        sensor_data["tds"] = round(max(0, 450 + np.random.randn() * 20), 2)
+        sensor_data["turbidity"] = round(max(0, 4 + np.random.randn() * 1.8), 2)
+    if "flowRate" in node["sensors"]:
+        # Flow rate in liters/hour (example)
+        sensor_data["flowRate"] = round(max(0, 150 + np.random.randn() * 25), 2)
+    if "waterLevel" in node["sensors"]:
+        # Water level in meters
+        sensor_data["waterLevel"] = round(max(0, 2.5 + np.random.randn() * 0.5), 2)
 
     if sensor_data: # Only return if data was generated
         return {
