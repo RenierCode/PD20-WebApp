@@ -224,6 +224,13 @@ start_backend() {
     python -m pip install --quiet -r "$BACKEND_DIR/requirements.txt"
     deactivate
   fi
+
+  # Final guard: if activate still missing, fail with guidance
+  if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    print_error "Virtualenv activate script not found at $VENV_DIR/bin/activate"
+    print_error "Try rerunning install stage: sudo $0 $REPO_DIR false"
+    exit 1
+  fi
   
   print_step "Starting backend (FastAPI) on port $BACKEND_PORT..."
   
