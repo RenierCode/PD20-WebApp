@@ -145,3 +145,6 @@ git commit -m "Add .gitattributes and normalize line endings"
 
 - Frontend code: `frontend/src/` (React components and pages)
 - Backend code: `backend/` (FastAPI app and models)
+
+
+DATABASE_URL="mongodb+srv://team20-argus:6Y6EI4YHPIGc38qi@cluster0.zk2khx5.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
