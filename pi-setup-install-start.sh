@@ -215,6 +215,16 @@ start_backend() {
   VENV_DIR="$BACKEND_DIR/.venv"
   BACKEND_LOG="/var/log/pd20-backend.log"
   
+  # Ensure the virtual environment exists (handles prior failed installs)
+  if [ ! -d "$VENV_DIR" ] || [ ! -f "$VENV_DIR/bin/activate" ]; then
+    print_warning "Virtual environment missing at $VENV_DIR. Recreating..."
+    python3 -m venv "$VENV_DIR" || { print_error "Failed to create virtualenv"; exit 1; }
+    source "$VENV_DIR/bin/activate"
+    python -m pip install --quiet --upgrade pip setuptools wheel
+    python -m pip install --quiet -r "$BACKEND_DIR/requirements.txt"
+    deactivate
+  fi
+  
   print_step "Starting backend (FastAPI) on port $BACKEND_PORT..."
   
   if [ "$BACKGROUND_MODE" = true ]; then
