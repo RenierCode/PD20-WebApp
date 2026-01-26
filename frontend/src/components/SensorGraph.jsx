@@ -34,11 +34,12 @@ ChartJS.register(
 const API_URL = 'http://127.0.0.1:8000';
 
 const timeRanges = [
-  { key: 'latest24h', label: 'Latest 24 Hours (from data)' },
-  { key: '24h', label: 'Last 24 Hours (from now)' },
-  { key: '1w', label: 'Last 7 Days (from now)' },
-  { key: '1m', label: 'Last 30 Days (from now)' },
-  { key: 'all', label: 'All Data' },
+  { key: '10m', label: '10 Minutes' },
+  { key: '30m', label: '30 Minutes' },
+  { key: '1h', label: '1 Hour' },
+  { key: '6h', label: '6 Hours' },
+  { key: '24h', label: '24 Hours' },
+  { key: '7d', label: '7 Days' },
 ];
 
 const BRIGHT_COLORS = [
@@ -46,8 +47,7 @@ const BRIGHT_COLORS = [
   '#911EB4', '#46F0F0', '#F032E6', '#FFE119',
 ];
 
-const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnomalies, onAnomalyNotification, anomalyCount = 0, onShowAnomalyDetails }) => {
-    const [rangeIndex, setRangeIndex] = useState(0);
+const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnomalies, onAnomalyNotification, anomalyCount = 0, onShowAnomalyDetails, timeRange = '24h', fromNow = true }) => {
     const [chartData, setChartData] = useState({ datasets: [] });
     // Separate loading states
     const [isInitialLoading, setIsInitialLoading] = useState(true); // For manual changes/first load
@@ -95,13 +95,9 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
         if (!isPoll) setIsInitialLoading(true); else setIsPolling(true);
         setError(null); // Clear previous errors
 
-        const activeRange = timeRanges[rangeIndex]; // Get current range
-
         try {
-            // Promise for readings: Use initialData only on the very first load for index 0
-            let readingsPromise = (rangeIndex === 0 && isInitialLoading && !isPoll)
-                ? Promise.resolve(initialData)
-                : axios.get(`${API_URL}/api/nodes/${nodeId}/readings?range=${activeRange.key}&sensor=${sensorKey}`).then(res => res.data);
+            // Fetch readings using the timeRange prop from parent
+            let readingsPromise = axios.get(`${API_URL}/api/nodes/${nodeId}/readings?range=${timeRange}&sensor=${sensorKey}&fromNow=${fromNow}`).then(res => res.data);
 
             // Wait for readings
             const readingsData = await readingsPromise;
@@ -159,17 +155,17 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
             if (!isPoll) setIsInitialLoading(false);
             setIsPolling(false);
         }
-    }, [nodeId, sensorKey, initialData, rangeIndex, showAnomalies, graphColor, formatChartData, isInitialLoading]); // Added isInitialLoading to dependencies
+    }, [nodeId, sensorKey, timeRange, fromNow, showAnomalies, graphColor, formatChartData]); // Use props from parent
 
-    // Effect for initial load and manual changes (range, anomalies toggle)
+    // Effect for initial load and manual changes (range, anomalies toggle, fromNow)
     useEffect(() => {
         fetchData(false); // Fetch as non-poll on these changes
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rangeIndex, showAnomalies]); // Dependencies are rangeIndex and showAnomalies, fetchData is called but doesn't need to be dependency here
+    }, [timeRange, fromNow, showAnomalies]); // Dependencies are timeRange, fromNow, and showAnomalies from parent
 
     // If the parent passes updated `initialData` (NodeDetailPage polling), update chart immediately
     useEffect(() => {
-        if (rangeIndex !== 0 || !initialData) return;
+        if (!initialData) return;
         try {
             const finalChartData = formatChartData(initialData);
 
@@ -191,7 +187,7 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
             // ignore formatting errors here
             console.error('Failed to apply initialData to chart', e);
         }
-    }, [initialData, rangeIndex, showAnomalies, sensorKey, formatChartData]);
+    }, [initialData, showAnomalies, sensorKey, formatChartData]);
 
 
     // --- Polling useEffect ---
@@ -212,11 +208,6 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
             clearInterval(intervalId);
         };
     }, [fetchData, sensorKey]); // Re-setup interval if fetchData changes
-
-    // Function to cycle through time ranges
-    const cycleTimeRange = () => {
-        setRangeIndex((prevIndex) => (prevIndex + 1) % timeRanges.length);
-    };
 
     // Chart.js configuration options
     const chartOptions = {
@@ -239,10 +230,11 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
               // DO NOT specify 'unit: 'hour'' or similar here.
               // Just provide the display formats it *can* use.
               displayFormats: {
-                hour: 'MMM d, h a', // How to format if it chooses 'hour'
-                day: 'MMM d',      // How to format if it chooses 'day'
-                month: 'MMM yyyy'  // How to format if it chooses 'month'
-                // Add formats for 'minute', 'week', etc., if needed
+                second: 'h:mm:ss a',  // For very short ranges
+                minute: 'h:mm a',     // For 10m, 30m ranges
+                hour: 'h a',          // For 1h, 6h ranges
+                day: 'MMM d',         // For 24h, 7d ranges
+                month: 'MMM yyyy'     // For longer ranges
               }
             },
             ticks: {
@@ -264,17 +256,22 @@ const SensorGraph = ({ nodeId, sensorKey, initialData, className = '', showAnoma
     // Determine overall loading state for placeholder text
     const isLoading = isInitialLoading || isPolling;
 
+    // Get label for current time range
+    const timeRangeLabel = timeRanges.find(r => r.key === timeRange)?.label || timeRange;
+
     return (
         <div className={`bg-white p-4 rounded-lg shadow-md ${className}`}>
-            {/* Header section with button and indicators */}
+            {/* Header section with indicators */}
             <div className="flex justify-between items-center mb-2">
-                <button
-                    onClick={cycleTimeRange}
-                    className="flex items-center gap-2 px-3 py-1 bg-white text-blue-600 border border-blue-300 rounded-md font-semibold hover:bg-blue-50 transition-colors text-sm"
-                >
-                    <LuClock size={16} />
-                    <span>{timeRanges[rangeIndex].label}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 px-3 py-1 bg-gray-50 text-gray-600 border border-gray-200 rounded-md text-sm">
+                        <LuClock size={16} />
+                        <span>{timeRangeLabel}</span>
+                    </div>
+                    <div className={`px-2 py-1 rounded-md text-xs font-medium ${fromNow ? 'bg-blue-50 text-blue-600 border border-blue-200' : 'bg-green-50 text-green-600 border border-green-200'}`}>
+                        {fromNow ? 'Now' : 'Data'}
+                    </div>
+                </div>
                 <div className="flex items-center gap-4">
                     {showAnomalies && (<FaExclamationTriangle size={16} className="text-red-500" title="Anomaly detection active" />)}
                     {/* Per-sensor anomaly badge (shows count and opens details via callback) */}

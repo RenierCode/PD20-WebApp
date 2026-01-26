@@ -68,7 +68,36 @@ const SummaryGraph = ({ rawGraphData, nodeColors, isLoading, error, selectedSens
     setChartData(transformDataForChartJS(rawGraphData, nodeColors));
   }, [rawGraphData, nodeColors, transformDataForChartJS]);
   
-  const chartOptions = { responsive: true, maintainAspectRatio: false, interaction:{mode:'x',intersect:false}, plugins:{legend:{position:'top'},tooltip:{mode:'x',intersect:false}}, scales:{x:{type:'time',time:{displayFormats:{hour:'MMM d, h a',day:'MMM d',month:'MMM yyyy'},tooltipFormat:'PPp'},title:{display:true,text:'Timestamp'}},y:{title:{display:true,text:'Value'}}}, };
+  const chartOptions = { 
+    responsive: true, 
+    maintainAspectRatio: false, 
+    interaction: { mode: 'x', intersect: false }, 
+    plugins: { 
+      legend: { position: 'top' }, 
+      tooltip: { mode: 'x', intersect: false } 
+    }, 
+    scales: {
+      x: {
+        type: 'time',
+        time: {
+          displayFormats: {
+            minute: 'MM/dd/yyyy h:mm a',
+            hour: 'MM/dd/yyyy h a',
+            day: 'MM/dd/yyyy',
+            month: 'MM/yyyy'
+          },
+          tooltipFormat: 'MM/dd/yyyy h:mm:ss a'
+        },
+        ticks: {
+          maxTicksLimit: 10,
+          autoSkip: true,
+          autoSkipPadding: 20
+        },
+        title: { display: true, text: 'Timestamp' }
+      },
+      y: { title: { display: true, text: 'Value' } }
+    }
+  };
   
   if (!selectedSensor) {
      return (<div className="flex items-center justify-center h-96 bg-gray-50 rounded-lg"><p className="text-gray-500">Please select a sensor.</p></div>);
@@ -93,7 +122,8 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true); 
   const [error, setError] = useState(null);
   const [selectedSensor, setSelectedSensor] = useState(''); 
-  const [timeRange, setTimeRange] = useState('latest24h');
+  const [timeRange, setTimeRange] = useState('24h');
+  const [fromNow, setFromNow] = useState(true); // true = from current time, false = from latest data
   const [lineColors, setLineColors] = useState(() => shuffleColors()); 
   const [graphRefetchTrigger, setGraphRefetchTrigger] = useState(0);
 
@@ -101,7 +131,7 @@ const Dashboard = () => {
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState(null);
 
-  const rangeOptions = [{value:'latest24h',label:'Latest 24h(Data)'},{value:'24h',label:'Last 24h(Now)'},{value:'1w',label:'Last 7d'},{value:'1m',label:'Last 30d'},{value:'all',label:'All Time'},];
+  const rangeOptions = [{value:'10m',label:'10 Minutes'},{value:'30m',label:'30 Minutes'},{value:'1h',label:'1 Hour'},{value:'6h',label:'6 Hours'},{value:'24h',label:'24 Hours'},{value:'7d',label:'7 Days'},];
 
   // Memoized function to fetch nodes
   const fetchNodes = useCallback(async () => { 
@@ -115,11 +145,11 @@ const Dashboard = () => {
     if (!isPoll) setGraphLoading(true); 
     setGraphError(null);
     try {
-      const r = await axios.get(`${API_URL}/api/data/sensor/${selectedSensor}?range=${timeRange}`);
+      const r = await axios.get(`${API_URL}/api/data/sensor/${selectedSensor}?range=${timeRange}&fromNow=${fromNow}`);
       setRawGraphData(r.data);
     } catch (e) { setGraphError(`Fetch error.`); console.error(e); } 
     finally { if (!isPoll) setGraphLoading(false); }
-  }, [selectedSensor, timeRange]);
+  }, [selectedSensor, timeRange, fromNow]);
 
   // Effect for initial node load
   useEffect(() => { setLoading(true); fetchNodes().finally(() => setLoading(false)); }, [fetchNodes]);
@@ -131,8 +161,8 @@ const Dashboard = () => {
     return () => clearInterval(id); 
   }, [fetchNodes]);
 
-  // Effect to fetch graph data on manual change (sensor, range)
-  useEffect(() => { fetchGraphData(false); }, [selectedSensor, timeRange, fetchGraphData]);
+  // Effect to fetch graph data on manual change (sensor, range, fromNow)
+  useEffect(() => { fetchGraphData(false); }, [selectedSensor, timeRange, fromNow, fetchGraphData]);
 
   // Effect to fetch graph data on poll trigger
   useEffect(() => { if (graphRefetchTrigger > 0) { fetchGraphData(true); } }, [graphRefetchTrigger, fetchGraphData]);
@@ -145,6 +175,45 @@ const Dashboard = () => {
   useEffect(() => { if(allSensors.length>0 && selectedSensor===''){setSelectedSensor(allSensors[Math.floor(Math.random()*allSensors.length)]);} }, [allSensors, selectedSensor]);
   
   const handleSensorChange = (e) => {setSelectedSensor(e.target.value); setLineColors(shuffleColors());};
+
+  // Calculate the date range to display based on selected time range and data
+  const dateRangeDisplay = useMemo(() => {
+    const formatDate = (date) => {
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      const yyyy = date.getFullYear();
+      return `${mm}/${dd}/${yyyy}`;
+    };
+
+    if (timeRange === 'all') {
+      if (rawGraphData.length === 0) return 'All Time';
+      const firstDate = new Date(rawGraphData[0].timestamp);
+      const lastDate = new Date(rawGraphData[rawGraphData.length - 1].timestamp);
+      return `${formatDate(firstDate)} - ${formatDate(lastDate)}`;
+    }
+
+    // Use current time as end for all ranges
+    let endDate = new Date();
+    let startDate;
+
+    if (timeRange === '10m') {
+      startDate = new Date(endDate.getTime() - 10 * 60 * 1000);
+    } else if (timeRange === '30m') {
+      startDate = new Date(endDate.getTime() - 30 * 60 * 1000);
+    } else if (timeRange === '1h') {
+      startDate = new Date(endDate.getTime() - 60 * 60 * 1000);
+    } else if (timeRange === '6h') {
+      startDate = new Date(endDate.getTime() - 6 * 60 * 60 * 1000);
+    } else if (timeRange === '24h') {
+      startDate = new Date(endDate.getTime() - 24 * 60 * 60 * 1000);
+    } else if (timeRange === '7d') {
+      startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else {
+      startDate = new Date(endDate.getTime() - 24 * 60 * 60 * 1000);
+    }
+
+    return `${formatDate(startDate)} - ${formatDate(endDate)}`;
+  }, [timeRange, rawGraphData]);
 
   // Calculate latest data here in the parent
   const latestNodeData = useMemo(() => {
@@ -184,6 +253,18 @@ const Dashboard = () => {
           <div className="flex items-center gap-4">
             <select value={selectedSensor} onChange={handleSensorChange} className="p-2 border rounded-md bg-gray-50"><option value="" disabled>{allSensors.length>0?'-- Sensor --':'Loading...'}</option>{allSensors.map((s)=>(<option key={s} value={s}>{s}</option>))}</select>
             <select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} className="p-2 border rounded-md bg-gray-50">{rangeOptions.map((o)=>(<option key={o.value} value={o.value}>{o.label}</option>))}</select>
+            <button
+              onClick={() => setFromNow(!fromNow)}
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${fromNow ? 'bg-blue-100 text-blue-700 border border-blue-300' : 'bg-green-100 text-green-700 border border-green-300'}`}
+              title={fromNow ? 'Currently showing data relative to current time' : 'Currently showing data relative to latest data point'}
+            >
+              {fromNow ? 'From Now' : 'From Data'}
+            </button>
+            {dateRangeDisplay && (
+              <span className="text-sm text-gray-600 font-medium bg-gray-100 px-3 py-2 rounded-md">
+                {dateRangeDisplay}
+              </span>
+            )}
           </div>
         </div>
 

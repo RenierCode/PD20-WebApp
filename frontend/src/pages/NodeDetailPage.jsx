@@ -30,6 +30,18 @@ const NodeDetailPage = () => {
   const [sensorKeys, setSensorKeys] = useState([]); 
   const [loading, setLoading] = useState(true); // For initial page load
   const [error, setError] = useState(null);
+  const [timeRange, setTimeRange] = useState('24h'); // Default to 24 Hours
+  const [fromNow, setFromNow] = useState(false); // Default to from latest data (more useful when no recent data)
+  
+  // Time range options
+  const rangeOptions = [
+    {value:'10m',label:'10 Minutes'},
+    {value:'30m',label:'30 Minutes'},
+    {value:'1h',label:'1 Hour'},
+    {value:'6h',label:'6 Hours'},
+    {value:'24h',label:'24 Hours'},
+    {value:'7d',label:'7 Days'},
+  ];
   
   // State to control anomaly detection for all graphs
   const [showAnomalies, setShowAnomalies] = useState(false);
@@ -48,9 +60,9 @@ const NodeDetailPage = () => {
     if (!isPoll) setLoading(true); // Only show full "Loading..." on first load
     setError(null);
     try {
-      // Fetch 'latest24h' data (default range)
+      // Fetch data based on selected range and fromNow toggle
       const response = await axios.get(
-        `${API_URL}/api/nodes/${nodeId}/readings?range=latest24h` 
+        `${API_URL}/api/nodes/${nodeId}/readings?range=${timeRange}&fromNow=${fromNow}` 
       );
       
       const data = response.data;
@@ -62,13 +74,16 @@ const NodeDetailPage = () => {
             Object.keys(reading.sensorData).forEach(key => allKeys.add(key));
           }
         });
-        setSensorKeys(Array.from(allKeys).sort());
-        setInitialData(data); // This state update triggers graphs to re-render
+        // Only update sensorKeys if we found new ones (preserve existing if no data)
+        if (allKeys.size > 0) {
+          setSensorKeys(Array.from(allKeys).sort());
+        }
+        setInitialData(data);
+        setError(null); // Clear any previous error
       } else {
-        // Don't set error if polling and no data, just clear
-        if (!isPoll) setError("No data found for this node.");
+        // No data in this range - keep sensorKeys, just clear data
         setInitialData([]);
-        setSensorKeys([]);
+        // Don't show error, graphs will just be empty
       }
       
     } catch (err) {
@@ -77,7 +92,23 @@ const NodeDetailPage = () => {
     } finally {
       if (!isPoll) setLoading(false);
     }
-  }, [nodeId]); // Depends only on nodeId
+  }, [nodeId, timeRange, fromNow]); // Depends on nodeId, timeRange, and fromNow
+
+  // Fetch sensor keys from node info (so we know what sensors exist even with no data in range)
+  useEffect(() => {
+    const fetchNodeInfo = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/api/nodes`);
+        const node = response.data.find(n => n.nodeId === nodeId);
+        if (node && node.sensors && node.sensors.length > 0) {
+          setSensorKeys(node.sensors.sort());
+        }
+      } catch (err) {
+        console.error('Failed to fetch node info:', err);
+      }
+    };
+    if (nodeId) fetchNodeInfo();
+  }, [nodeId]);
 
   // --- MODIFIED: This effect runs ONCE for initial load ---
   useEffect(() => {
@@ -117,6 +148,45 @@ const NodeDetailPage = () => {
       return null;
     }).filter(Boolean);
   }, [initialData, sensorKeys]);
+
+  // Calculate the date range to display based on selected time range and data
+  const dateRangeDisplay = useMemo(() => {
+    const formatDate = (date) => {
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      const yyyy = date.getFullYear();
+      return `${mm}/${dd}/${yyyy}`;
+    };
+
+    if (timeRange === 'all') {
+      if (initialData.length === 0) return 'All Time';
+      const firstDate = new Date(initialData[0].timestamp);
+      const lastDate = new Date(initialData[initialData.length - 1].timestamp);
+      return `${formatDate(firstDate)} - ${formatDate(lastDate)}`;
+    }
+
+    // Use current time as end for all ranges
+    let endDate = new Date();
+    let startDate;
+
+    if (timeRange === '10m') {
+      startDate = new Date(endDate.getTime() - 10 * 60 * 1000);
+    } else if (timeRange === '30m') {
+      startDate = new Date(endDate.getTime() - 30 * 60 * 1000);
+    } else if (timeRange === '1h') {
+      startDate = new Date(endDate.getTime() - 60 * 60 * 1000);
+    } else if (timeRange === '6h') {
+      startDate = new Date(endDate.getTime() - 6 * 60 * 60 * 1000);
+    } else if (timeRange === '24h') {
+      startDate = new Date(endDate.getTime() - 24 * 60 * 60 * 1000);
+    } else if (timeRange === '7d') {
+      startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else {
+      startDate = new Date(endDate.getTime() - 24 * 60 * 60 * 1000);
+    }
+
+    return `${formatDate(startDate)} - ${formatDate(endDate)}`;
+  }, [timeRange, initialData]);
   
   // Handler for the button (Unchanged)
   const toggleAnomalies = async () => {
@@ -131,7 +201,7 @@ const NodeDetailPage = () => {
     setIsDetecting(true);
     setAnomalyNotification(null);
     try {
-      const resp = await axios.get(`${API_URL}/api/nodes/${nodeId}/readings?range=latest24h`);
+      const resp = await axios.get(`${API_URL}/api/nodes/${nodeId}/readings?range=${timeRange}&fromNow=${fromNow}`);
       const readings = resp.data || [];
 
       // Build a flat list of anomalies per sensor from reading.anomalies (preferred)
@@ -211,16 +281,34 @@ const NodeDetailPage = () => {
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-6">
         <h1 className="text-4xl font-bold">Sensor Data for {nodeId}</h1>
         {error && !loading && <div className="text-red-600 font-semibold">{error}</div>}
-        <button 
-         className={`px-4 py-2 rounded-md font-semibold transition-colors
-                   ${showAnomalies 
-                     ? 'bg-red-500 hover:bg-red-600 text-white' 
-                     : 'bg-blue-500 hover:bg-blue-600 text-white'}`}
-         onClick={toggleAnomalies}
-         disabled={isDetecting}
-        >
-          {isDetecting ? 'Detecting...' : (showAnomalies ? 'Hide Anomalies' : 'Detect Anomalies')}
-        </button>
+        <div className="flex items-center gap-3">
+          <select 
+            value={timeRange} 
+            onChange={(e) => setTimeRange(e.target.value)} 
+            className="p-2 border rounded-md bg-gray-50"
+          >
+            {rangeOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => setFromNow(!fromNow)}
+            className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${fromNow ? 'bg-blue-100 text-blue-700 border border-blue-300' : 'bg-green-100 text-green-700 border border-green-300'}`}
+            title={fromNow ? 'Currently showing data relative to current time' : 'Currently showing data relative to latest data point'}
+          >
+            {fromNow ? 'From Now' : 'From Data'}
+          </button>
+          <button 
+           className={`px-4 py-2 rounded-md font-semibold transition-colors
+                     ${showAnomalies 
+                       ? 'bg-red-500 hover:bg-red-600 text-white' 
+                       : 'bg-blue-500 hover:bg-blue-600 text-white'}`}
+           onClick={toggleAnomalies}
+           disabled={isDetecting}
+          >
+            {isDetecting ? 'Detecting...' : (showAnomalies ? 'Hide Anomalies' : 'Detect Anomalies')}
+          </button>
+        </div>
       </div>
 
       {/* Transient toast notification (appears for 5s) */}
@@ -272,6 +360,8 @@ const NodeDetailPage = () => {
                   initialData={initialData} // This prop now updates from polling
                   className={itemClassName}
                   showAnomalies={showAnomalies}
+                  timeRange={timeRange}
+                  fromNow={fromNow}
                   anomalyCount={anomalyNotification?.bySensor?.[key]?.length || 0}
                   onShowAnomalyDetails={(sensor) => {
                     // Open modal with details for this sensor

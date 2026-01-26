@@ -23,3 +23,10 @@ Thumbs.db
 .vscode/
 .idea/
 /.history
+
+# Arduino and ESP32 code
+backend/arduino_i2c_test/
+backend/arduino_sensor_slave/
+backend/esp32_i2c_scanner/
+backend/esp32_master_lora/
+backend/esp32_sensor_lora/
