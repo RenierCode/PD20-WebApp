@@ -1,4 +1,5 @@
-// File: src/Reports.js
+// Reports.jsx - Report Generation Page
+// See DOCS.md in project root for full documentation
 
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';

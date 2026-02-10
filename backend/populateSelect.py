@@ -6,6 +6,9 @@ import os
 from dotenv import load_dotenv
 import argparse
 
+# Import shared config
+from config import THRESHOLDS
+
 # --- Load Environment Variables ---
 load_dotenv()
 MONGO_URI = os.getenv("DATABASE_URL")
@@ -16,12 +19,8 @@ if not MONGO_URI:
     raise Exception("DATABASE_URL not found in .env file.")
 
 # --- Configurable variables (edit here or pass via CLI) ---
-# Number of readings to insert
 POPULATE = 45
-# Node id to assign readings to
 NODE_ID = "node-001"
-# Define how many anomalies to create for each sensor within the POPULATE set
-# Keys must match sensor names used in your DB: flowRate, waterLevel, pH, turbidity, temperature
 ANOMALY_COUNTS = {
     "pH": 0,
     "temperature": 1,
@@ -36,15 +35,6 @@ NODES_TO_ENSURE = [
     {"_id": "node-002", "sensors": ["flowRate", "pH", "turbidity"]},
     {"_id": "node-003", "sensors": ["waterLevel", "temperature"]},
 ]
-
-# --- Thresholds used to determine normal/anomalous ranges (match processData.py) ---
-THRESHOLDS = {
-    "flowRate": {"min": 50.0, "max": 300.0},
-    "waterLevel": {"min": 0.2, "max": 5.0},
-    "pH": {"min": 6.5, "max": 8.0},
-    "turbidity": {"min": 0.0, "max": 10.0},
-    "temperature": {"min": 5.0, "max": 35.0},
-}
 
 
 def connect_db():

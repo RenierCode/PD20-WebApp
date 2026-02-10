@@ -1,3 +1,6 @@
+// MapPage.jsx - Geographic Map View
+// See DOCS.md in project root for full documentation
+
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';

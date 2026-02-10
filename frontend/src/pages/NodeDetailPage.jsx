@@ -1,3 +1,6 @@
+// NodeDetailPage.jsx - Node Detail View
+// See DOCS.md in project root for full documentation
+
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'; // Import useCallback and useMemo
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';

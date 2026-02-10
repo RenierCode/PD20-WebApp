@@ -1,3 +1,6 @@
+// Sidebar.jsx - Navigation Sidebar
+// See DOCS.md in project root for full documentation
+
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { 

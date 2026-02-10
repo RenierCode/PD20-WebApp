@@ -1,3 +1,6 @@
+// SensorsNode.jsx - Nodes List Page
+// See DOCS.md in project root for full documentation
+
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { LuHardDrive, LuTimer } from 'react-icons/lu';

@@ -1,4 +1,5 @@
-// File: src/components/SensorGraph.js
+// SensorGraph.jsx - Reusable Sensor Chart
+// See DOCS.md in project root for full documentation
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';

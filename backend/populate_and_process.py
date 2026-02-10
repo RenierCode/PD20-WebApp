@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import argparse
 
+# Import shared config
+from config import THRESHOLDS
+
 # Load env
 load_dotenv()
 MONGO_URI = os.getenv("DATABASE_URL")
@@ -22,15 +25,6 @@ NODES_TO_ENSURE = [
     {"_id": "node-002", "sensors": ["flowRate", "pH", "turbidity"]},
     {"_id": "node-003", "sensors": ["waterLevel", "temperature"]},
 ]
-
-# Thresholds (keep in sync with processData.py)
-THRESHOLDS = {
-    "flowRate": {"min": 50.0, "max": 300.0},
-    "waterLevel": {"min": 0.2, "max": 5.0},
-    "pH": {"min": 6.5, "max": 8.0},
-    "turbidity": {"min": 0.0, "max": 10.0},
-    "temperature": {"min": 5.0, "max": 35.0},
-}
 
 
 def connect_db():
